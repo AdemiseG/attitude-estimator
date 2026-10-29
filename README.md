@@ -101,6 +101,34 @@ standard fixes are to reject accelerometer updates when |a| departs from g, or
 to subtract kinematic acceleration estimated from GPS velocity. The latter is
 close to what ArduPilot's EKF3 actually does.
 
+## C port
+
+`c/attitude.c` is the filter as it will run on hardware: no allocation, no I/O,
+no libc beyond `math.h`, caller-owned state. It compiles clean under
+`-Wall -Wextra -Wpedantic -Wdouble-promotion -Wconversion`. The
+`-Wdouble-promotion` flag is there deliberately — one stray `double` on a
+single-precision FPU drops the whole expression into software emulation, and
+`atan2` instead of `atan2f` is the usual way that happens.
+
+`c/replay.c` is a host harness, not firmware. It exists to prove the C answers
+match the Python reference before any of it meets a microcontroller:
+
+| | C (float32) | Python (float64) |
+|---|---|---|
+| complementary | 3.74642° / 6.32076° | 3.74642° / 6.32076° |
+| gyro only | 52.30336° / 155.74855° | 52.30337° / 155.74859° |
+
+The filter agrees to every digit printed; the gyro-only integrator does not.
+That is the expected result rather than a coincidence. The filter is a feedback
+loop — gravity pulls it back every step, so rounding error cannot accumulate.
+Open-loop integration has nothing correcting it, so 4409 steps of float32
+rounding surface in the fifth digit. Single precision is safe here because of
+the structure, not by luck.
+
+```bash
+cd c && make && ./replay ../data/flight2.csv 0.95
+```
+
 ## Reproduce it
 
 ```bash
@@ -127,9 +155,12 @@ follow-up in
 | `collect/collect_flight.py` | flies SITL and extracts IMU + ground truth |
 | `data/flight1.csv` | the hover log that could not validate anything (kept deliberately) |
 | `data/flight2.csv` | 4409 samples, 176 s, 25 Hz, with real attitude dynamics |
+| `c/attitude.{h,c}` | the filter in portable C, destined for the Teensy |
+| `c/replay.c` | host harness that validates the C against the Python |
 
 ## Next
 
-- Port to C for a Teensy 4.1 with an MPU6050 — same algorithm, real sensor
+- Run the C filter on a Teensy 4.1 with an MPU6050 — the filter is ported and
+  validated; what remains is the I2C driver and sampling loop
 - Reject accelerometer updates when |a| is far from g, and re-measure
 - Estimate and subtract gyro bias online rather than letting α absorb it
